@@ -1,0 +1,263 @@
+{
+ "name": "Examplemonk",
+ "race": "Night Elf",
+ "class": "Monk",
+ "active_spec_name": "Brewmaster",
+ "active_spec_role": "TANK",
+ "gender": "female",
+ "faction": "alliance",
+ "achievement_points": 12345,
+ "thumbnail_url": "https://render.worldofwarcraft.com/us/character/area-52/0/0-avatar.jpg",
+ "region": "us",
+ "realm": "Area 52",
+ "last_crawled_at": "2026-09-15T20:59:23.000Z",
+ "profile_url": "https://raider.io/characters/us/area-52/Examplemonk",
+ "profile_banner": "alliancebanner1",
+ "mythic_plus_scores_by_season": [
+  {
+   "season": "season-mn-2",
+   "scores": {
+    "all": 3924.3,
+    "dps": 3924.3,
+    "healer": 0,
+    "tank": 1391,
+    "spec_0": 1391,
+    "spec_1": 0,
+    "spec_2": 3924.3,
+    "spec_3": 0
+   },
+   "segments": {
+    "all": {
+     "score": 3924.3,
+     "color": "#fe7e17"
+    },
+    "dps": {
+     "score": 3924.3,
+     "color": "#fe7e17"
+    },
+    "healer": {
+     "score": 0,
+     "color": "#ffffff"
+    },
+    "tank": {
+     "score": 1391,
+     "color": "#89ff6d"
+    },
+    "spec_0": {
+     "score": 1391,
+     "color": "#89ff6d"
+    },
+    "spec_1": {
+     "score": 0,
+     "color": "#ffffff"
+    },
+    "spec_2": {
+     "score": 3924.3,
+     "color": "#fe7e17"
+    },
+    "spec_3": {
+     "score": 0,
+     "color": "#ffffff"
+    }
+   }
+  }
+ ],
+ "mythic_plus_weekly_highest_level_runs": [
+  {
+   "dungeon": "Murder Row",
+   "short_name": "MR",
+   "mythic_level": 12,
+   "completed_at": "2026-09-15T17:13:07.000Z",
+   "clear_time_ms": 1119018,
+   "keystone_run_id": 1000,
+   "par_time_ms": 2040999,
+   "num_keystone_upgrades": 3,
+   "map_challenge_mode_id": 587,
+   "zone_id": 16091,
+   "zone_expansion_id": 11,
+   "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/inv_achievement_dungeon_murderrow.jpg",
+   "background_image_url": "https://cdn.raiderio.net/images/dungeons/expansion11/base/murder-row.jpg",
+   "score": 380,
+   "affixes": [
+    {
+     "id": 10,
+     "name": "Fortified",
+     "description": "Non-boss enemies have 20% more health and inflict up to 20% increased damage.",
+     "icon": "ability_toughness",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_toughness.jpg",
+     "wowhead_url": "https://wowhead.com/affix=10"
+    },
+    {
+     "id": 9,
+     "name": "Tyrannical",
+     "description": "Bosses have 25% more health. Bosses and their minions inflict up to 15% increased damage.",
+     "icon": "achievement_boss_archaedas",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/achievement_boss_archaedas.jpg",
+     "wowhead_url": "https://wowhead.com/affix=9"
+    },
+    {
+     "id": 147,
+     "name": "Xal'atath's Guile",
+     "description": "Xal'atath betrays players, revoking her bargains while making deaths subtract 15 seconds from time remaining.",
+     "icon": "ability_racial_chillofnight",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_racial_chillofnight.jpg",
+     "wowhead_url": "https://wowhead.com/affix=147"
+    }
+   ],
+   "url": "https://raider.io/mythic-plus-runs/season-mn-2/1000",
+   "spec": {
+    "id": 268,
+    "name": "Brewmaster",
+    "slug": "brewmaster",
+    "class_id": 10,
+    "role": "tank",
+    "is_melee": true,
+    "patch": "5.0.0",
+    "ordinal": 0
+   },
+   "role": "tank"
+  },
+  {
+   "dungeon": "Murder Row",
+   "short_name": "MR",
+   "mythic_level": 12,
+   "completed_at": "2026-09-15T17:43:07.000Z",
+   "clear_time_ms": 1312532,
+   "keystone_run_id": 1001,
+   "par_time_ms": 2040999,
+   "num_keystone_upgrades": 2,
+   "map_challenge_mode_id": 587,
+   "zone_id": 16091,
+   "zone_expansion_id": 11,
+   "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/inv_achievement_dungeon_murderrow.jpg",
+   "background_image_url": "https://cdn.raiderio.net/images/dungeons/expansion11/base/murder-row.jpg",
+   "score": 378.4,
+   "affixes": [
+    {
+     "id": 10,
+     "name": "Fortified",
+     "description": "Non-boss enemies have 20% more health and inflict up to 20% increased damage.",
+     "icon": "ability_toughness",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_toughness.jpg",
+     "wowhead_url": "https://wowhead.com/affix=10"
+    },
+    {
+     "id": 9,
+     "name": "Tyrannical",
+     "description": "Bosses have 25% more health. Bosses and their minions inflict up to 15% increased damage.",
+     "icon": "achievement_boss_archaedas",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/achievement_boss_archaedas.jpg",
+     "wowhead_url": "https://wowhead.com/affix=9"
+    },
+    {
+     "id": 147,
+     "name": "Xal'atath's Guile",
+     "description": "Xal'atath betrays players, revoking her bargains while making deaths subtract 15 seconds from time remaining.",
+     "icon": "ability_racial_chillofnight",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_racial_chillofnight.jpg",
+     "wowhead_url": "https://wowhead.com/affix=147"
+    }
+   ],
+   "url": "https://raider.io/mythic-plus-runs/season-mn-2/1001",
+   "spec": {
+    "id": 268,
+    "name": "Brewmaster",
+    "slug": "brewmaster",
+    "class_id": 10,
+    "role": "tank",
+    "is_melee": true,
+    "patch": "5.0.0",
+    "ordinal": 0
+   },
+   "role": "tank"
+  },
+  {
+   "dungeon": "Kings' Rest",
+   "short_name": "KR",
+   "mythic_level": 12,
+   "completed_at": "2026-09-15T16:51:00.000Z",
+   "clear_time_ms": 1459705,
+   "keystone_run_id": 1002,
+   "par_time_ms": 1980999,
+   "num_keystone_upgrades": 2,
+   "map_challenge_mode_id": 249,
+   "zone_id": 9526,
+   "zone_expansion_id": 7,
+   "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/achievement_dungeon_kingsrest.jpg",
+   "background_image_url": "https://cdn.raiderio.net/images/dungeons/expansion7/base/kings-rest.jpg",
+   "score": 374.9,
+   "affixes": [
+    {
+     "id": 10,
+     "name": "Fortified",
+     "description": "Non-boss enemies have 20% more health and inflict up to 20% increased damage.",
+     "icon": "ability_toughness",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_toughness.jpg",
+     "wowhead_url": "https://wowhead.com/affix=10"
+    },
+    {
+     "id": 9,
+     "name": "Tyrannical",
+     "description": "Bosses have 25% more health. Bosses and their minions inflict up to 15% increased damage.",
+     "icon": "achievement_boss_archaedas",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/achievement_boss_archaedas.jpg",
+     "wowhead_url": "https://wowhead.com/affix=9"
+    },
+    {
+     "id": 147,
+     "name": "Xal'atath's Guile",
+     "description": "Xal'atath betrays players, revoking her bargains while making deaths subtract 15 seconds from time remaining.",
+     "icon": "ability_racial_chillofnight",
+     "icon_url": "https://cdn.raiderio.net/images/wow/icons/large/ability_racial_chillofnight.jpg",
+     "wowhead_url": "https://wowhead.com/affix=147"
+    }
+   ],
+   "url": "https://raider.io/mythic-plus-runs/season-mn-2/1002",
+   "spec": {
+    "id": 268,
+    "name": "Brewmaster",
+    "slug": "brewmaster",
+    "class_id": 10,
+    "role": "tank",
+    "is_melee": true,
+    "patch": "5.0.0",
+    "ordinal": 0
+   },
+   "role": "tank"
+  }
+ ],
+ "raid_progression": {
+  "the-tidebound-grotto": {
+   "summary": "1/1 M",
+   "expansion_id": 11,
+   "total_bosses": 1,
+   "normal_bosses_killed": 0,
+   "heroic_bosses_killed": 1,
+   "mythic_bosses_killed": 1
+  },
+  "the-venomous-abyss": {
+   "summary": "5/8 M",
+   "expansion_id": 11,
+   "total_bosses": 8,
+   "normal_bosses_killed": 8,
+   "heroic_bosses_killed": 8,
+   "mythic_bosses_killed": 5
+  },
+  "sporefall": {
+   "summary": "1/1 M",
+   "expansion_id": 11,
+   "total_bosses": 1,
+   "normal_bosses_killed": 0,
+   "heroic_bosses_killed": 1,
+   "mythic_bosses_killed": 1
+  },
+  "tier-mn-1": {
+   "summary": "9/9 M",
+   "expansion_id": 11,
+   "total_bosses": 9,
+   "normal_bosses_killed": 9,
+   "heroic_bosses_killed": 9,
+   "mythic_bosses_killed": 9
+  }
+ }
+}

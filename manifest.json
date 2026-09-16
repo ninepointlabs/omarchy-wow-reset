@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "ninepointlabs.wow-reset",
+  "name": "WoW Weekly Reset",
+  "version": "0.1.0",
+  "author": "Ninepoint Labs",
+  "license": "MIT",
+  "description": "World of Warcraft weekly reset countdown for Omarchy, with this week's Mythic+ affixes, your characters' weekly keys, and optional raid lockouts.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "WoW Weekly Reset",
+    "description": "Countdown to the weekly reset; click for affixes, weekly keys and raid lockouts.",
+    "category": "Games",
+    "aliases": [
+      "wow",
+      "warcraft",
+      "reset",
+      "lockout",
+      "affixes",
+      "mythic"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "region": "US",
+      "icon": "Sword",
+      "showCountdown": true
+    },
+    "schema": [
+      {
+        "key": "region",
+        "type": "enum",
+        "label": "Region",
+        "options": ["US", "EU", "KR", "TW"],
+        "defaultValue": "US",
+        "description": "Which weekly reset to count down to (US Tuesday, EU Wednesday) and where new characters are looked up."
+      },
+      {
+        "key": "icon",
+        "type": "enum",
+        "label": "Bar icon",
+        "options": ["Sword", "Horde", "Alliance"],
+        "defaultValue": "Sword",
+        "description": "Horde and Alliance emblems are downloaded once from warcraft.wiki.gg and drawn in the bar colour."
+      },
+      {
+        "key": "showCountdown",
+        "type": "boolean",
+        "label": "Show the countdown next to the icon",
+        "defaultValue": true
+      }
+    ]
+  }
+}

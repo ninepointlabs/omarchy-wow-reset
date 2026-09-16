@@ -1,0 +1,1010 @@
+#!/usr/bin/python3 -IS
+"""Raider.io / Blizzard client and settings store for ninepointlabs.wow-reset.
+
+Service.qml runs this as `<trusted python3> -I -S -B wow-reset-ops` under
+bin/bounded-run, with a cleared environment. It reads one JSON object from
+stdin (never argv):
+  {"op":"affixes","region":"us"}
+  {"op":"lookup","region":"us","name":"Examplemonk","realm":"Area 52"}
+  {"op":"characters","characters":[{"region":"us","name":"Examplemonk","realm":"Area 52"}]}
+  {"op":"load"}
+  {"op":"save","config":{"version":1,"characters":[...]}}
+  {"op":"set_blizzard","clientId":"...","clientSecret":"..."}
+  {"op":"clear_blizzard"}
+  {"op":"emblem","faction":"horde"}
+
+Writes one JSON object to stdout. Raider.io needs no key. Blizzard client
+credentials are optional: they live in blizzard.json (0600) and never leave
+this helper — `load` only reports whether they are set.
+
+Faction emblems are Blizzard artwork, so none ship with the plugin: `emblem`
+downloads a small thumbnail from warcraft.wiki.gg on first use, keeps only
+its shape as a white alpha mask, and caches that in the state directory.
+
+The only argument accepted is `--home DIR`, used by the tests to point the
+store at a scratch directory; the shell never passes it, and the home
+directory otherwise comes from the password database, not $HOME.
+"""
+from __future__ import annotations
+
+import base64
+import calendar
+import errno
+import http.client
+import json
+import os
+import pwd
+import re
+import secrets
+import stat
+import sys
+import time
+import struct
+import zlib
+import urllib.error
+import urllib.parse
+import urllib.request
+
+UA = "ninepointlabs.wow-reset/0.1 (+https://github.com/ninepointlabs)"
+RIO_HOST = "raider.io"
+OAUTH_HOST = "oauth.battle.net"
+REGIONS = ("us", "eu", "kr", "tw")
+API_HOSTS = {region: region + ".api.blizzard.com" for region in REGIONS}
+WIKI_HOST = "warcraft.wiki.gg"
+ALLOWED_HOSTS = {RIO_HOST, OAUTH_HOST, WIKI_HOST, *API_HOSTS.values()}
+TIMEOUT = 20
+BODY_MAX = 1048576
+REQUEST_MAX = 65536
+READ_CHUNK = 16384
+MAX_CHARACTERS = 12
+NAME_MAX = 24
+REALM_MAX = 40
+CREDENTIAL_MAX = 128
+TAG = re.compile(r"<[^>]*>")
+CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+CREDENTIAL = re.compile(r"[A-Za-z0-9_-]{8,128}")
+
+# ~/.local/state/omarchy-wow-reset/{config.json,blizzard.json}
+STATE_COMPONENTS = (".local", "state", "omarchy-wow-reset")
+STATE_LABELS = ("~/.local", "~/.local/state", "~/.local/state/omarchy-wow-reset")
+CONFIG_NAME = "config.json"
+BLIZZARD_NAME = "blizzard.json"
+FILE_MAX = 65536
+
+# Wiki file per faction. The Alliance logo is a gold lion on a blue shield, so
+# its mask keeps the gold; the Horde sigil is a single shape, so alpha is enough.
+EMBLEMS = {"horde": "File:HordeLogo.png", "alliance": "File:Alliance Logo.png"}
+EMBLEM_WIDTH = 128
+EMBLEM_DOWNLOAD_MAX = 262144
+EMBLEM_DIMENSION_MAX = 512
+
+
+class StoreError(Exception):
+    pass
+
+
+class RemoteError(Exception):
+    def __init__(self, message, status=0):
+        super().__init__(message)
+        self.status = status
+
+
+def clean(value, limit=200):
+    text = "" if value is None else str(value)
+    text = TAG.sub("", text)
+    text = CTRL.sub("", text)
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def fail(message, code=1):
+    json.dump({"ok": False, "error": clean(message, 200)}, sys.stdout, ensure_ascii=True)
+    sys.stdout.write("\n")
+    raise SystemExit(code)
+
+
+def read_request():
+    raw = sys.stdin.buffer.read(REQUEST_MAX + 1)
+    if len(raw) > REQUEST_MAX:
+        fail("Request too large")
+    if not raw.strip():
+        fail("Empty request")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail("Request is not JSON")
+    if not isinstance(data, dict):
+        fail("Request must be an object")
+    return data
+
+
+def valid_region(value):
+    region = clean(value, 4).lower()
+    return region if region in REGIONS else ""
+
+
+def valid_name(value):
+    # Character names are letters only (accented letters included), 2-12 in
+    # game; allow a little slack but no punctuation, digits or spaces.
+    name = clean(value, NAME_MAX)
+    if len(name) < 2 or not all(ch.isalpha() for ch in name):
+        return ""
+    return name
+
+
+def valid_realm(value):
+    realm = clean(value, REALM_MAX)
+    if len(realm) < 2 or not all(ch.isalnum() or ch in " '-" for ch in realm):
+        return ""
+    return realm
+
+
+def realm_slug(realm):
+    """Blizzard realm slug: "Area 52" -> "area-52", "Area 52" -> "area-52"."""
+    text = realm.lower().replace("'", "")
+    text = re.sub(r"[\s-]+", "-", text)
+    return text.strip("-")
+
+
+# ---------------------------------------------------------------------------
+# HTTP: allow-listed hosts only, no proxies, redirects stay on the same host,
+# every body is capped while it is read, error bodies are never read.
+# ---------------------------------------------------------------------------
+
+class SameHostRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 3
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        if parsed.scheme != "https" or parsed.hostname != urllib.parse.urlparse(req.full_url).hostname:
+            raise urllib.error.HTTPError(newurl, 403, "redirect to another host", headers, fp)
+        return urllib.request.HTTPRedirectHandler.redirect_request(
+            self, req, fp, code, msg, headers, newurl
+        )
+
+
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), SameHostRedirect())
+
+
+def read_capped(resp, limit):
+    length = resp.headers.get("Content-Length")
+    if length is not None:
+        try:
+            if int(length) > limit:
+                return None
+        except ValueError:
+            return None
+    chunks = []
+    total = 0
+    while True:
+        chunk = resp.read(min(READ_CHUNK, limit + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            return None
+    return b"".join(chunks)
+
+
+def request_json(url, label, headers=None, data=None):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+        raise RemoteError("Refusing to contact " + clean(parsed.hostname, 60))
+    head = {"User-Agent": UA, "Accept": "application/json"}
+    head.update(headers or {})
+    req = urllib.request.Request(url, headers=head, data=data, method="POST" if data is not None else "GET")
+    try:
+        with OPENER.open(req, timeout=TIMEOUT) as resp:
+            body = read_capped(resp, BODY_MAX)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code == 429:
+            raise RemoteError(label + " asked us to slow down; try again in a minute", 429) from None
+        raise RemoteError(f"{label} HTTP {exc.code}", exc.code) from None
+    except TimeoutError:
+        raise RemoteError(label + " timed out") from None
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
+        raise RemoteError("Could not reach " + label) from None
+    if body is None:
+        raise RemoteError(label + " response too large")
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RemoteError(label + " sent unreadable JSON") from None
+
+
+def rio(path, params):
+    return request_json("https://" + RIO_HOST + path + "?" + urllib.parse.urlencode(params), "Raider.io")
+
+
+# ------------------------------------------------------------- Raider.io --
+
+def parse_affixes(data, region):
+    if not isinstance(data, dict) or not isinstance(data.get("affix_details"), list):
+        raise RemoteError("Unexpected affix response")
+    items = []
+    for raw in data["affix_details"][:8]:
+        if not isinstance(raw, dict):
+            continue
+        name = clean(raw.get("name"), 60)
+        if not name:
+            continue
+        items.append({
+            "id": raw["id"] if isinstance(raw.get("id"), int) else 0,
+            "name": name,
+            "description": clean(raw.get("description"), 240),
+        })
+    return {"region": region, "title": clean(data.get("title"), 200), "items": items}
+
+
+def op_affixes(region):
+    region = valid_region(region)
+    if not region:
+        fail("Unknown region")
+    try:
+        data = rio("/api/v1/mythic-plus/affixes", {"region": region, "locale": "en"})
+        return {"ok": True, "affixes": parse_affixes(data, region), "fetchedAt": int(time.time() * 1000)}
+    except RemoteError as exc:
+        fail(str(exc), 4)
+
+
+def iso_ms(value):
+    text = clean(value, 32)
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z", text)
+    if not match:
+        return 0
+    parts = [int(p) for p in match.groups()]
+    try:
+        return calendar.timegm((*parts, 0, 0, 0)) * 1000
+    except (OverflowError, ValueError):
+        return 0
+
+
+def parse_current_raids(data, region, now_ms):
+    """Raids whose window (for this region) contains now, from raiding/static-data."""
+    raids = []
+    if not isinstance(data, dict) or not isinstance(data.get("raids"), list):
+        return raids
+    for raw in data["raids"]:
+        if not isinstance(raw, dict):
+            continue
+        starts = raw.get("starts") if isinstance(raw.get("starts"), dict) else {}
+        ends = raw.get("ends") if isinstance(raw.get("ends"), dict) else {}
+        start = iso_ms(starts.get(region))
+        end = iso_ms(ends.get(region))
+        if start == 0 or start > now_ms or (end and end <= now_ms):
+            continue
+        encounters = raw.get("encounters") if isinstance(raw.get("encounters"), list) else []
+        raids.append({
+            "slug": clean(raw.get("slug"), 60),
+            "name": clean(raw.get("name"), 60),
+            "bosses": len(encounters),
+        })
+    return raids
+
+
+# Midnight is Raider.io expansion 11. Later expansions are probed in order so
+# the plugin keeps working after the next launch without an update.
+FIRST_EXPANSION = 11
+
+
+def current_raids(region, now_ms):
+    found = []
+    for expansion in range(FIRST_EXPANSION, FIRST_EXPANSION + 3):
+        try:
+            static = rio("/api/v1/raiding/static-data", {"expansion_id": str(expansion)})
+        except RemoteError as exc:
+            if exc.status in (400, 404) and expansion > FIRST_EXPANSION:
+                break
+            raise
+        raids = parse_current_raids(static, region, now_ms)
+        if raids:
+            found = raids
+    return found
+
+
+def parse_weekly_run(raw):
+    if not isinstance(raw, dict):
+        return None
+    level = raw.get("mythic_level")
+    if not isinstance(level, int) or level <= 0 or level > 99:
+        return None
+    upgrades = raw.get("num_keystone_upgrades")
+    return {
+        "dungeon": clean(raw.get("dungeon"), 40),
+        "short": clean(raw.get("short_name"), 8),
+        "level": level,
+        "timed": isinstance(upgrades, int) and upgrades > 0,
+        "completedAt": clean(raw.get("completed_at"), 32),
+    }
+
+
+def parse_rio_character(data, region, current_raids):
+    if not isinstance(data, dict) or not clean(data.get("name"), NAME_MAX):
+        raise RemoteError("Unexpected character response")
+    runs = []
+    for raw in (data.get("mythic_plus_weekly_highest_level_runs") or [])[:10]:
+        run = parse_weekly_run(raw)
+        if run:
+            runs.append(run)
+    score = 0.0
+    seasons = data.get("mythic_plus_scores_by_season")
+    if isinstance(seasons, list) and seasons and isinstance(seasons[0], dict):
+        scores = seasons[0].get("scores") if isinstance(seasons[0].get("scores"), dict) else {}
+        if isinstance(scores.get("all"), (int, float)):
+            score = round(float(scores["all"]), 1)
+    progression = data.get("raid_progression") if isinstance(data.get("raid_progression"), dict) else {}
+    raids = []
+    for raid in current_raids:
+        entry = progression.get(raid["slug"])
+        if not isinstance(entry, dict):
+            continue
+        raids.append({
+            "name": raid["name"],
+            "summary": clean(entry.get("summary"), 16),
+            "total": entry["total_bosses"] if isinstance(entry.get("total_bosses"), int) else raid["bosses"],
+        })
+    return {
+        "region": region,
+        "name": clean(data.get("name"), NAME_MAX),
+        "realm": clean(data.get("realm"), REALM_MAX),
+        "className": clean(data.get("class"), 24),
+        "spec": clean(data.get("active_spec_name"), 24),
+        "score": score,
+        "weeklyRuns": runs,
+        "progression": raids,
+        "profileUrl": clean(data.get("profile_url"), 200),
+    }
+
+
+def rio_character(region, name, realm, fields):
+    params = {"region": region, "realm": realm, "name": name}
+    if fields:
+        # Raider.io answers 400 to an empty fields parameter.
+        params["fields"] = fields
+    return rio("/api/v1/characters/profile", params)
+
+
+def op_lookup(req):
+    region, name, realm = valid_region(req.get("region")), valid_name(req.get("name")), valid_realm(req.get("realm"))
+    if not region:
+        fail("Unknown region")
+    if not name:
+        fail("Enter the character name (letters only)")
+    if not realm:
+        fail("Enter the realm name")
+    try:
+        data = rio_character(region, name, realm, "")
+    except RemoteError as exc:
+        if exc.status in (400, 404):
+            fail(f"Raider.io has no {name} on {realm} ({region.upper()})", 2)
+        fail(str(exc), 4)
+    character = {
+        "region": region,
+        "name": clean(data.get("name"), NAME_MAX) if isinstance(data, dict) else "",
+        "realm": clean(data.get("realm"), REALM_MAX) if isinstance(data, dict) else "",
+    }
+    if not valid_name(character["name"]) or not valid_realm(character["realm"]):
+        fail("Unexpected character response")
+    return {"ok": True, "character": character}
+
+
+# ------------------------------------------------------------- Blizzard --
+
+def blizzard_token(credentials):
+    basic = base64.b64encode((credentials["clientId"] + ":" + credentials["clientSecret"]).encode("ascii")).decode("ascii")
+    data = request_json(
+        "https://" + OAUTH_HOST + "/token",
+        "Battle.net",
+        headers={"Authorization": "Basic " + basic, "Content-Type": "application/x-www-form-urlencoded"},
+        data=b"grant_type=client_credentials",
+    )
+    token = data.get("access_token") if isinstance(data, dict) else None
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9._~+/=-]{8,512}", token):
+        raise RemoteError("Battle.net did not return a token")
+    return token
+
+
+def parse_encounters(data, current_raids):
+    """Trim encounters/raids to the current raids: per difficulty, each boss
+    and its last kill time (ms). Weekly counting happens in Model.js."""
+    if not isinstance(data, dict):
+        raise RemoteError("Unexpected encounters response")
+    wanted = {raid["name"].lower() for raid in current_raids}
+    expansions = [e for e in (data.get("expansions") or []) if isinstance(e, dict)]
+    instances = []
+    for expansion in expansions:
+        for inst in expansion.get("instances") or []:
+            if not isinstance(inst, dict) or not isinstance(inst.get("instance"), dict):
+                continue
+            name = clean(inst["instance"].get("name"), 60)
+            if name.lower() not in wanted:
+                continue
+            modes = []
+            for mode in inst.get("modes") or []:
+                if not isinstance(mode, dict):
+                    continue
+                difficulty = mode.get("difficulty") if isinstance(mode.get("difficulty"), dict) else {}
+                progress = mode.get("progress") if isinstance(mode.get("progress"), dict) else {}
+                bosses = []
+                for enc in (progress.get("encounters") or [])[:20]:
+                    if not isinstance(enc, dict) or not isinstance(enc.get("encounter"), dict):
+                        continue
+                    last = enc.get("last_kill_timestamp")
+                    bosses.append({
+                        "name": clean(enc["encounter"].get("name"), 60),
+                        "lastKill": last if isinstance(last, int) and last > 0 else 0,
+                    })
+                total = progress.get("total_count")
+                modes.append({
+                    "difficulty": clean(difficulty.get("type"), 16).upper(),
+                    "label": clean(difficulty.get("name"), 24),
+                    "total": total if isinstance(total, int) and 0 < total <= 30 else len(bosses),
+                    "bosses": bosses,
+                })
+            instances.append({"name": name, "modes": modes})
+    return instances
+
+
+def blizzard_encounters(token, region, name, realm, current_raids):
+    path = "/profile/wow/character/{}/{}/encounters/raids".format(
+        urllib.parse.quote(realm_slug(realm), safe=""),
+        urllib.parse.quote(name.lower(), safe=""),
+    )
+    query = urllib.parse.urlencode({"namespace": "profile-" + region, "locale": "en_US"})
+    data = request_json("https://" + API_HOSTS[region] + path + "?" + query, "Blizzard",
+                        headers={"Authorization": "Bearer " + token})
+    return parse_encounters(data, current_raids)
+
+
+# ---------------------------------------------------------------- Emblem --
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def decode_png_rgba(data):
+    """Decode an 8-bit RGBA, non-interlaced PNG. Anything else is refused."""
+    if not isinstance(data, (bytes, bytearray)) or data[:8] != PNG_SIGNATURE:
+        raise ValueError("not a PNG")
+    pos, ihdr, idat = 8, None, []
+    while pos + 12 <= len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        if length > len(data) - pos - 12:
+            raise ValueError("truncated PNG")
+        body = data[pos + 8:pos + 8 + length]
+        if zlib.crc32(kind + body) & 0xFFFFFFFF != struct.unpack(">I", data[pos + 8 + length:pos + 12 + length])[0]:
+            raise ValueError("corrupt PNG")
+        pos += 12 + length
+        if kind == b"IHDR":
+            if length != 13:
+                raise ValueError("bad PNG header")
+            ihdr = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+    if ihdr is None or not idat:
+        raise ValueError("incomplete PNG")
+    width, height, depth, color_type, compression, filter_method, interlace = ihdr
+    if not (0 < width <= EMBLEM_DIMENSION_MAX and 0 < height <= EMBLEM_DIMENSION_MAX):
+        raise ValueError("unexpected image size")
+    if (depth, color_type, compression, filter_method, interlace) != (8, 6, 0, 0, 0):
+        raise ValueError("unsupported PNG format")
+    stride = width * 4
+    expected = height * (stride + 1)
+    # Bounded inflate: a small download cannot expand past the declared size.
+    inflater = zlib.decompressobj()
+    raw = inflater.decompress(b"".join(idat), expected + 1)
+    if len(raw) != expected:
+        raise ValueError("PNG data does not match its size")
+    out = bytearray(height * stride)
+    prev = bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        kind = raw[start]
+        line = bytearray(raw[start + 1:start + 1 + stride])
+        if kind == 1:
+            for x in range(4, stride):
+                line[x] = (line[x] + line[x - 4]) & 255
+        elif kind == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 255
+        elif kind == 3:
+            for x in range(stride):
+                left = line[x - 4] if x >= 4 else 0
+                line[x] = (line[x] + (left + prev[x]) // 2) & 255
+        elif kind == 4:
+            for x in range(stride):
+                a = line[x - 4] if x >= 4 else 0
+                b = prev[x]
+                c = prev[x - 4] if x >= 4 else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        elif kind != 0:
+            raise ValueError("bad PNG filter")
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    return width, height, out
+
+
+def emblem_mask(width, height, pixels, faction):
+    mask = bytearray(width * height)
+    for i in range(width * height):
+        r, g, b, a = pixels[i * 4:i * 4 + 4]
+        if faction == "alliance":
+            gold = max(0, min(255, (min(r, g) - b) * 2))
+            mask[i] = a * gold // 255
+        else:
+            mask[i] = a
+    return mask
+
+
+def crop_mask(width, height, mask, threshold=24):
+    xs = [i % width for i, v in enumerate(mask) if v >= threshold]
+    if not xs:
+        raise ValueError("emblem is empty")
+    ys = [i // width for i, v in enumerate(mask) if v >= threshold]
+    left, right = max(0, min(xs) - 1), min(width - 1, max(xs) + 1)
+    top, bottom = max(0, min(ys) - 1), min(height - 1, max(ys) + 1)
+    cw, ch = right - left + 1, bottom - top + 1
+    out = bytearray(cw * ch)
+    for y in range(ch):
+        row = (top + y) * width
+        out[y * cw:(y + 1) * cw] = mask[row + left:row + left + cw]
+    return cw, ch, out
+
+
+def encode_mask_png(width, height, mask):
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for value in mask[y * width:(y + 1) * width]:
+            raw += bytes((255, 255, 255, value))
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    return (PNG_SIGNATURE
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
+def download(url, limit, label):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+        raise RemoteError("Refusing to contact " + clean(parsed.hostname, 60))
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with OPENER.open(req, timeout=TIMEOUT) as resp:
+            body = read_capped(resp, limit)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise RemoteError(f"{label} HTTP {exc.code}", exc.code) from None
+    except TimeoutError:
+        raise RemoteError(label + " timed out") from None
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
+        raise RemoteError("Could not reach " + label) from None
+    if body is None:
+        raise RemoteError(label + " image too large")
+    return body
+
+
+def emblem_thumb_url(faction):
+    query = urllib.parse.urlencode({
+        "action": "query", "prop": "imageinfo", "titles": EMBLEMS[faction],
+        "iiprop": "url", "iiurlwidth": str(EMBLEM_WIDTH), "format": "json",
+    })
+    data = request_json("https://" + WIKI_HOST + "/api.php?" + query, "warcraft.wiki.gg")
+    pages = data.get("query", {}).get("pages", {}) if isinstance(data, dict) else {}
+    for page in pages.values() if isinstance(pages, dict) else []:
+        info = page.get("imageinfo") if isinstance(page, dict) else None
+        if isinstance(info, list) and info and isinstance(info[0], dict):
+            url = info[0].get("thumburl")
+            if isinstance(url, str):
+                parsed = urllib.parse.urlparse(url)
+                if parsed.scheme == "https" and parsed.hostname == WIKI_HOST:
+                    return url
+    raise RemoteError("warcraft.wiki.gg did not return the emblem")
+
+
+def emblem_name(faction):
+    return "emblem-" + faction + ".png"
+
+
+def op_emblem(home, faction):
+    faction = clean(faction, 12).lower()
+    if faction not in EMBLEMS:
+        fail("Unknown faction")
+    filename = emblem_name(faction)
+    path = home.rstrip("/") + "/" + "/".join(STATE_COMPONENTS) + "/" + filename
+
+    def cached(dir_fd):
+        raw = read_state_file(dir_fd, filename)
+        return raw is not None and raw[:8] == PNG_SIGNATURE
+
+    if with_state_directory(home, cached):
+        return {"ok": True, "emblem": {"faction": faction, "path": path}}
+    try:
+        png = download(emblem_thumb_url(faction), EMBLEM_DOWNLOAD_MAX, "warcraft.wiki.gg")
+        width, height, pixels = decode_png_rgba(png)
+        width, height, mask = crop_mask(width, height, emblem_mask(width, height, pixels, faction))
+    except RemoteError as exc:
+        fail(str(exc), 4)
+    except (ValueError, zlib.error, struct.error):
+        fail("The emblem image could not be read", 8)
+    data = encode_mask_png(width, height, mask)
+    with_state_directory(home, lambda fd: write_state_file(fd, filename, data))
+    return {"ok": True, "emblem": {"faction": faction, "path": path}}
+
+
+# ------------------------------------------------------------ Characters --
+
+def op_characters(req, home):
+    raw_list = req.get("characters")
+    if not isinstance(raw_list, list):
+        fail("characters must be a list")
+    wanted = []
+    for raw in raw_list[:MAX_CHARACTERS]:
+        if not isinstance(raw, dict):
+            continue
+        region, name, realm = valid_region(raw.get("region")), valid_name(raw.get("name")), valid_realm(raw.get("realm"))
+        if region and name and realm:
+            wanted.append((region, name, realm))
+    now_ms = int(time.time() * 1000)
+
+    credentials = None
+    try:
+        dir_fd = open_state_directory(home)
+        try:
+            credentials = load_credentials(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except StoreError as exc:
+        fail(str(exc), 9)
+
+    raids_by_region = {}
+    tokens = {}
+    blizzard_error = ""
+    out, errors = [], []
+    for region, name, realm in wanted:
+        try:
+            if region not in raids_by_region:
+                raids_by_region[region] = current_raids(region, now_ms)
+            current = raids_by_region[region]
+            data = rio_character(region, name, realm,
+                                 "raid_progression,mythic_plus_weekly_highest_level_runs,mythic_plus_scores_by_season:current")
+            character = parse_rio_character(data, region, current)
+        except RemoteError as exc:
+            errors.append(f"{name}: {exc}")
+            out.append({"region": region, "name": name, "realm": realm, "error": clean(str(exc), 120)})
+            continue
+        character["lockouts"] = None
+        if credentials and not blizzard_error:
+            try:
+                if "token" not in tokens:
+                    tokens["token"] = blizzard_token(credentials)
+                character["lockouts"] = blizzard_encounters(tokens["token"], region, character["name"],
+                                                            character["realm"], current)
+            except RemoteError as exc:
+                if exc.status == 404:
+                    character["lockoutError"] = "Blizzard has no raid data (private profile or not logged out yet)"
+                elif exc.status in (400, 401, 403) and "token" not in tokens:
+                    blizzard_error = "Blizzard rejected the client credentials"
+                else:
+                    character["lockoutError"] = clean(str(exc), 120)
+        out.append(character)
+    if errors and len(errors) == len(wanted):
+        fail(errors[0], 4)
+    result = {"ok": True, "characters": out, "blizzard": credentials is not None, "fetchedAt": now_ms}
+    if blizzard_error:
+        result["error"] = blizzard_error
+    elif errors:
+        result["error"] = clean(f"{len(errors)} character(s) failed to refresh", 200)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Store: every operation is relative to a held directory descriptor. No
+# pathname is resolved twice, no component is followed if it is a symlink,
+# and every opened object is checked by fstat before use.
+# ---------------------------------------------------------------------------
+
+def check_directory(fd, label, private=False):
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode):
+        raise StoreError(label + " is not a directory")
+    if info.st_uid != os.geteuid():
+        raise StoreError(label + " is not owned by you")
+    if info.st_mode & 0o022:
+        raise StoreError(label + " is writable by other users")
+    if private and info.st_mode & 0o077:
+        os.fchmod(fd, 0o700)
+
+
+def open_child_directory(parent_fd, name, label, private):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    for _attempt in range(2):
+        try:
+            fd = os.open(name, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            continue
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                raise StoreError(label + " is a symlink or not a directory") from None
+            raise StoreError("Could not open " + label) from None
+        try:
+            check_directory(fd, label, private)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+    raise StoreError("Could not create " + label)
+
+
+def home_directory(override):
+    if override is not None:
+        return override
+    return pwd.getpwuid(os.geteuid()).pw_dir
+
+
+def open_state_directory(home):
+    if not isinstance(home, str) or not home.startswith("/") or "\0" in home:
+        raise StoreError("Home directory is not an absolute path")
+    try:
+        fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        raise StoreError("Could not open the home directory") from None
+    try:
+        check_directory(fd, "Home directory")
+        for index, name in enumerate(STATE_COMPONENTS):
+            child = open_child_directory(fd, name, STATE_LABELS[index],
+                                         private=index == len(STATE_COMPONENTS) - 1)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_state_file(dir_fd, filename):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+    try:
+        fd = os.open(filename, flags, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise StoreError(filename + " is a symlink") from None
+        raise StoreError("Could not open " + filename) from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise StoreError(filename + " is not a regular file")
+        if info.st_uid != os.geteuid():
+            raise StoreError(filename + " is not owned by you")
+        if info.st_nlink != 1:
+            raise StoreError(filename + " has extra hard links")
+        if info.st_mode & 0o022:
+            raise StoreError(filename + " is writable by other users")
+        if info.st_mode & 0o077:
+            os.fchmod(fd, 0o600)
+        if info.st_size > FILE_MAX:
+            raise StoreError(filename + " is too large")
+        chunks = []
+        total = 0
+        while total <= FILE_MAX:
+            chunk = os.read(fd, min(READ_CHUNK, FILE_MAX + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > FILE_MAX:
+            raise StoreError(filename + " is too large")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def write_state_file(dir_fd, filename, data):
+    try:
+        existing = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and (not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.geteuid()):
+        raise StoreError(filename + " is not a regular file you own; refusing to replace it")
+    temp = "." + filename + "." + secrets.token_hex(12) + ".tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NOCTTY | os.O_CLOEXEC
+    try:
+        fd = os.open(temp, flags, 0o600, dir_fd=dir_fd)
+    except OSError:
+        raise StoreError("Could not create a temporary file") from None
+    published = False
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+            view = memoryview(data)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(temp, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        published = True
+        os.fsync(dir_fd)
+    except StoreError:
+        raise
+    except OSError:
+        raise StoreError("Could not save " + filename) from None
+    finally:
+        if not published:
+            try:
+                os.unlink(temp, dir_fd=dir_fd)
+            except OSError:
+                pass
+
+
+def remove_state_file(dir_fd, filename):
+    try:
+        existing = os.stat(filename, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(existing.st_mode):
+        raise StoreError(filename + " is a directory; refusing to remove it")
+    try:
+        os.unlink(filename, dir_fd=dir_fd)
+        os.fsync(dir_fd)
+    except OSError:
+        raise StoreError("Could not remove " + filename) from None
+
+
+def load_credentials(dir_fd):
+    raw = read_state_file(dir_fd, BLIZZARD_NAME)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    client_id, client_secret = data.get("clientId"), data.get("clientSecret")
+    if not isinstance(client_id, str) or not isinstance(client_secret, str):
+        return None
+    if not CREDENTIAL.fullmatch(client_id) or not CREDENTIAL.fullmatch(client_secret):
+        return None
+    return {"clientId": client_id, "clientSecret": client_secret}
+
+
+def sanitize_characters(raw_list):
+    characters, seen = [], set()
+    for raw in raw_list if isinstance(raw_list, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        region, name, realm = valid_region(raw.get("region")), valid_name(raw.get("name")), valid_realm(raw.get("realm"))
+        if not (region and name and realm):
+            continue
+        key = (region, name.lower(), realm_slug(realm))
+        if key in seen:
+            continue
+        seen.add(key)
+        characters.append({"region": region, "name": name, "realm": realm})
+        if len(characters) >= MAX_CHARACTERS:
+            break
+    return characters
+
+
+def op_load(home):
+    try:
+        dir_fd = open_state_directory(home)
+        try:
+            raw = read_state_file(dir_fd, CONFIG_NAME)
+            has_blizzard = load_credentials(dir_fd) is not None
+        finally:
+            os.close(dir_fd)
+    except StoreError as exc:
+        fail(str(exc), 9)
+    result = {"ok": True, "config": {"version": 1, "characters": []}, "blizzard": has_blizzard}
+    if raw is None or not raw.strip():
+        return result
+    try:
+        config = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        result["error"] = "config.json is not readable; starting empty"
+        return result
+    if not isinstance(config, dict):
+        result["error"] = "config.json is not readable; starting empty"
+        return result
+    result["config"]["characters"] = sanitize_characters(config.get("characters"))
+    return result
+
+
+def with_state_directory(home, action):
+    try:
+        dir_fd = open_state_directory(home)
+        try:
+            return action(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except StoreError as exc:
+        fail(str(exc), 9)
+
+
+def op_save(home, config):
+    if not isinstance(config, dict) or not isinstance(config.get("characters"), list):
+        fail("Config must be an object with a characters list")
+    if len(config["characters"]) > MAX_CHARACTERS:
+        fail("Too many characters")
+    characters = sanitize_characters(config["characters"])
+    data = (json.dumps({"version": 1, "characters": characters}, ensure_ascii=True, indent=1) + "\n").encode("ascii")
+    with_state_directory(home, lambda fd: write_state_file(fd, CONFIG_NAME, data))
+    return {"ok": True}
+
+
+def op_set_blizzard(home, req):
+    client_id = req.get("clientId").strip() if isinstance(req.get("clientId"), str) else ""
+    client_secret = req.get("clientSecret").strip() if isinstance(req.get("clientSecret"), str) else ""
+    if not CREDENTIAL.fullmatch(client_id) or not CREDENTIAL.fullmatch(client_secret):
+        fail("Paste the Client ID and Client Secret from develop.battle.net")
+    credentials = {"clientId": client_id, "clientSecret": client_secret}
+    # Only store credentials Battle.net accepts.
+    try:
+        blizzard_token(credentials)
+    except RemoteError as exc:
+        if exc.status in (400, 401, 403):
+            fail("Battle.net rejected that Client ID / Secret", 2)
+        fail(str(exc), 4)
+    data = (json.dumps(credentials, ensure_ascii=True) + "\n").encode("ascii")
+    with_state_directory(home, lambda fd: write_state_file(fd, BLIZZARD_NAME, data))
+    return {"ok": True, "blizzard": True}
+
+
+def op_clear_blizzard(home):
+    with_state_directory(home, lambda fd: remove_state_file(fd, BLIZZARD_NAME))
+    return {"ok": True, "blizzard": False}
+
+
+def parse_argv(argv):
+    if not argv:
+        return None
+    if len(argv) == 2 and argv[0] == "--home":
+        return argv[1]
+    fail("Unexpected arguments")
+
+
+def main():
+    home_override = parse_argv(sys.argv[1:])
+    req = read_request()
+    op = clean(req.get("op"), 16).lower()
+    if op == "affixes":
+        result = op_affixes(req.get("region"))
+    elif op == "lookup":
+        result = op_lookup(req)
+    elif op == "characters":
+        result = op_characters(req, home_directory(home_override))
+    elif op == "load":
+        result = op_load(home_directory(home_override))
+    elif op == "save":
+        result = op_save(home_directory(home_override), req.get("config"))
+    elif op == "set_blizzard":
+        result = op_set_blizzard(home_directory(home_override), req)
+    elif op == "clear_blizzard":
+        result = op_clear_blizzard(home_directory(home_override))
+    elif op == "emblem":
+        result = op_emblem(home_directory(home_override), req.get("faction"))
+    else:
+        fail("Unknown operation")
+    json.dump(result, sys.stdout, ensure_ascii=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,483 @@
+#!/usr/bin/python3 -IS
+# bounded-run: run one command under a race-free supervisor with producer-side
+# output caps, a deadline, and process-group termination.
+#
+# Invoke with a fixed interpreter and a cleared environment, never via PATH:
+#   /usr/bin/python3 -I -S -B /abs/plugin/bin/bounded-run \
+#       --stdout-cap BYTES --stderr-cap BYTES --deadline SECONDS --grace SECONDS \
+#       -- /abs/executable args...
+#
+#   --stdout-cap/--stderr-cap  0 means uncapped (long-lived streams only)
+#   --deadline                 0 means no deadline
+#   stdin is inherited by the command; the environment is the one this process
+#   was started with (the caller is expected to have cleared it) minus shell
+#   and loader injection hooks (BASH_ENV, ENV, BASH_FUNC_*, LD_PRELOAD, ...);
+#   no PATH search is ever done.
+#
+# Exit status: the command's own status (128+N if killed by signal N), or
+#   124 deadline reached, 201 stdout cap exceeded, 202 stderr cap exceeded,
+#   125 usage/spawn failure, 126 not executable, 127 not found,
+#   128+N when this supervisor was told to stop by signal N (HUP/INT/TERM).
+#   At most CAP bytes of each stream are forwarded; the first byte past a cap
+#   stops forwarding and terminates the command.
+#
+# Why this is race-free: the command is started in its own session/process
+# group, so its PGID equals its PID. This supervisor is its direct parent and
+# does not reap it until every signal has been sent. Until it is reaped, even
+# as a zombie, the kernel keeps that PID -- and therefore that PGID -- in use,
+# so killpg() can only ever reach the original group. The supervisor is also a
+# child subreaper: descendants orphaned inside or outside the group are
+# re-parented to it, are only ever signalled while they are its own unreaped
+# children, and are all reaped before it exits. Nothing is ever signalled by a
+# bare number from an asynchronous helper.
+
+import ctypes
+import errno
+import os
+import selectors
+import signal
+import sys
+import time
+
+EXIT_TIMEOUT = 124
+EXIT_USAGE = 125
+EXIT_NOEXEC = 126
+EXIT_NOTFOUND = 127
+EXIT_STDOUT_CAP = 201
+EXIT_STDERR_CAP = 202
+
+PR_SET_PDEATHSIG = 1
+PR_SET_CHILD_SUBREAPER = 36
+
+READ_CHUNK = 65536
+REAP_POLL_SECONDS = 0.05
+MAX_GRACE_SECONDS = 60
+# After SIGKILL, give uninterruptible processes this long to go before
+# exiting anyway.
+KILL_SETTLE_SECONDS = 5
+# Dispositions this supervisor changes, restored to default for the command.
+DEFAULT_SIGNALS = (signal.SIGPIPE, signal.SIGHUP, signal.SIGINT, signal.SIGTERM,
+                   signal.SIGCHLD, signal.SIGXFSZ)
+
+
+def fail(message, status=EXIT_USAGE):
+    try:
+        os.write(2, ("bounded-run: " + message + "\n").encode("utf-8", "replace"))
+    except OSError:
+        pass
+    os._exit(status)
+
+
+def parse_args(argv):
+    options = {"--stdout-cap": None, "--stderr-cap": None, "--deadline": None, "--grace": None}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--":
+            i += 1
+            break
+        if arg not in options or i + 1 >= len(argv):
+            fail("usage: bounded-run --stdout-cap N --stderr-cap N --deadline S --grace S -- /abs/cmd [args...]")
+        value = argv[i + 1]
+        if not value.isdigit() or len(value) > 12:
+            fail("invalid value for " + arg)
+        options[arg] = int(value)
+        i += 2
+    else:
+        fail("missing -- before the command")
+    if any(v is None for v in options.values()):
+        fail("--stdout-cap, --stderr-cap, --deadline and --grace are all required")
+    command = argv[i:]
+    if not command:
+        fail("missing command")
+    executable = command[0]
+    if not executable.startswith("/") or "\0" in executable:
+        fail("command must be an absolute path")
+    return (options["--stdout-cap"], options["--stderr-cap"], options["--deadline"],
+            min(options["--grace"], MAX_GRACE_SECONDS), command)
+
+
+def set_prctl(libc, option, value):
+    if libc.prctl(option, ctypes.c_ulong(value), 0, 0, 0) != 0:
+        fail("prctl(%d) failed: %s" % (option, os.strerror(ctypes.get_errno())))
+
+
+UNSAFE_ENVIRONMENT = {b"BASH_ENV", b"ENV", b"SHELLOPTS", b"BASHOPTS", b"PS4", b"CDPATH",
+                      b"GLOBIGNORE", b"LD_PRELOAD", b"LD_LIBRARY_PATH", b"LD_AUDIT",
+                      b"GCONV_PATH", b"PYTHONSTARTUP", b"PYTHONPATH", b"PYTHONHOME"}
+
+
+def command_environment():
+    """The environment this process was exec'ed with, minus injection hooks.
+
+    Read from /proc rather than os.environ, which the interpreter may already
+    have changed (PEP 538 locale coercion adds LC_CTYPE)."""
+    with open("/proc/self/environ", "rb") as handle:
+        raw = handle.read()
+    environment = {}
+    for entry in raw.split(b"\0"):
+        name, sep, value = entry.partition(b"=")
+        if not sep or not name or name in UNSAFE_ENVIRONMENT or name.startswith(b"BASH_FUNC_"):
+            continue
+        environment[name] = value
+    return environment
+
+
+def status_from_waitid(info):
+    if info.si_code == os.CLD_EXITED:
+        return info.si_status
+    return 128 + info.si_status
+
+
+class Supervisor:
+    def __init__(self, stdout_cap, stderr_cap, deadline, grace, command):
+        self.caps = {1: stdout_cap, 2: stderr_cap}
+        self.deadline = deadline
+        self.grace = grace
+        self.command = command
+        self.leader = None
+        self.leader_status = None
+        self.forwarded = {1: 0, 2: 0}
+        self.pending = {1: b"", 2: b""}
+        self.sources = {}
+        self.stop_signal = None
+        self.outcome = None
+
+    # -- signals -----------------------------------------------------------
+    def install_signals(self):
+        rfd, wfd = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        self.wake_read = rfd
+        signal.set_wakeup_fd(wfd, warn_on_full_buffer=False)
+
+        def on_stop(signum, _frame):
+            if self.stop_signal is None:
+                self.stop_signal = signum
+
+        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(signum, on_stop)
+        signal.signal(signal.SIGCHLD, lambda _s, _f: None)
+        # Our own writes must see EPIPE rather than kill us mid-cleanup.
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
+    # -- spawn -------------------------------------------------------------
+    def spawn(self):
+        out_r, out_w = os.pipe2(os.O_CLOEXEC)
+        err_r, err_w = os.pipe2(os.O_CLOEXEC)
+        # Carries exec's errno back to us; a successful exec closes it (CLOEXEC).
+        status_r, status_w = os.pipe2(os.O_CLOEXEC)
+        environment = command_environment()
+        supervisor = os.getpid()
+        pid = os.fork()
+        if pid == 0:
+            code = 0
+            try:
+                # Its own session and process group, so its PGID is its PID.
+                os.setsid()
+                # If this supervisor is killed outright (SIGKILL, OOM killer)
+                # it cannot clean up, and the command must not outlive it.
+                if (self.libc.prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0) != 0
+                        or os.getppid() != supervisor):
+                    os._exit(EXIT_USAGE)
+                signal.set_wakeup_fd(-1)
+                for signum in DEFAULT_SIGNALS:
+                    signal.signal(signum, signal.SIG_DFL)
+                signal.pthread_sigmask(signal.SIG_SETMASK, [])
+                os.dup2(out_w, 1)
+                os.dup2(err_w, 2)
+                os.execve(self.command[0], self.command, environment)
+            except OSError as error:
+                code = error.errno or 0
+            try:
+                os.write(status_w, str(code).encode())
+            except OSError:
+                pass
+            os._exit(EXIT_NOTFOUND)
+        self.leader = pid
+        os.close(out_w)
+        os.close(err_w)
+        os.close(status_w)
+        report = b""
+        while True:
+            chunk = os.read(status_r, 32)
+            if not chunk:
+                break
+            report += chunk
+        os.close(status_r)
+        if report:
+            # exec failed: nothing was ever signalled, so reaping is safe.
+            os.waitid(os.P_PID, pid, os.WEXITED)
+            code = int(report) if report.isdigit() else 0
+            if code == errno.ENOENT:
+                fail("not found: " + self.command[0], EXIT_NOTFOUND)
+            if code in (errno.EACCES, errno.EPERM, errno.ENOEXEC):
+                fail("not executable: " + self.command[0], EXIT_NOEXEC)
+            fail("could not start " + self.command[0] + ": " + os.strerror(code))
+        for fd in (out_r, err_r):
+            os.set_blocking(fd, False)
+        self.sources = {out_r: 1, err_r: 2}
+        for fd in (1, 2):
+            os.set_blocking(fd, False)
+
+    # -- children ----------------------------------------------------------
+    def own_children(self):
+        """PIDs this process is currently the parent of (single-threaded)."""
+        pid = os.getpid()
+        try:
+            with open("/proc/self/task/%d/children" % pid, "rb") as handle:
+                return [int(x) for x in handle.read().split()]
+        except OSError:
+            children = []
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open("/proc/%s/stat" % name, "rb") as handle:
+                        stat = handle.read()
+                    fields = stat[stat.rindex(b")") + 2:].split()
+                    if int(fields[1]) == pid:
+                        children.append(int(name))
+                except (OSError, ValueError, IndexError):
+                    continue
+            return children
+
+    def is_unreaped_child(self, pid):
+        """True only if pid is still our own child and not yet reaped.
+
+        Only this process ever reaps its children, so a True answer cannot go
+        stale before the signal that follows it is sent."""
+        try:
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            return True
+        except ChildProcessError:
+            return False
+
+    def reap_non_leader(self):
+        """Reap exited descendants other than the leader; return live others."""
+        alive = []
+        for pid in self.own_children():
+            if pid == self.leader or not self.is_unreaped_child(pid):
+                continue
+            try:
+                info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG)
+            except ChildProcessError:
+                continue
+            if info is None:
+                alive.append(pid)
+        return alive
+
+    def leader_exited(self):
+        if self.leader_status is not None:
+            return True
+        info = os.waitid(os.P_PID, self.leader, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if info is None:
+            return False
+        self.leader_status = status_from_waitid(info)
+        return True
+
+    def signal_everything(self, signum):
+        # The leader is unreaped here, so its PID/PGID cannot have been reused.
+        try:
+            os.killpg(self.leader, signum)
+        except ProcessLookupError:
+            pass
+        for pid in self.reap_non_leader():
+            if self.is_unreaped_child(pid):
+                try:
+                    os.kill(pid, signum)
+                except ProcessLookupError:
+                    pass
+
+    def everything_gone(self):
+        return self.leader_exited() and not self.reap_non_leader()
+
+    def wait_until_gone(self, seconds):
+        end = time.monotonic() + seconds
+        while not self.everything_gone():
+            if time.monotonic() >= end:
+                return False
+            time.sleep(REAP_POLL_SECONDS)
+        return True
+
+    def terminate_all(self):
+        """TERM, grace, KILL -- then reap everything, the leader last."""
+        self.close_sources()
+        if not self.everything_gone():
+            self.signal_everything(signal.SIGTERM)
+            self.signal_everything(signal.SIGCONT)
+            if not self.wait_until_gone(self.grace):
+                self.signal_everything(signal.SIGKILL)
+                self.wait_until_gone(KILL_SETTLE_SECONDS)
+        self.reap_leader()
+
+    def reap_leader(self):
+        try:
+            info = os.waitid(os.P_PID, self.leader, os.WEXITED)
+            if self.leader_status is None and info is not None:
+                self.leader_status = status_from_waitid(info)
+        except ChildProcessError:
+            pass
+
+    # -- output ------------------------------------------------------------
+    def close_sources(self):
+        for fd in list(self.sources):
+            try:
+                self.selector.unregister(fd)
+            except (KeyError, ValueError):
+                pass
+            os.close(fd)
+        self.sources.clear()
+
+    def flush(self, stream, block=False):
+        data = self.pending[stream]
+        while data:
+            try:
+                written = os.write(stream, data)
+                data = data[written:]
+            except BlockingIOError:
+                if not block:
+                    break
+                time.sleep(0.01)
+            except OSError:
+                data = b""
+                self.pending[stream] = b""
+                return False
+        self.pending[stream] = data
+        return True
+
+    def on_readable(self, fd):
+        stream = self.sources[fd]
+        try:
+            chunk = os.read(fd, READ_CHUNK)
+        except BlockingIOError:
+            return
+        if not chunk:
+            self.selector.unregister(fd)
+            os.close(fd)
+            del self.sources[fd]
+            return
+        cap = self.caps[stream]
+        if cap:
+            room = cap - self.forwarded[stream]
+            if len(chunk) > room:
+                self.pending[stream] += chunk[:max(room, 0)]
+                self.forwarded[stream] = cap
+                self.outcome = EXIT_STDOUT_CAP if stream == 1 else EXIT_STDERR_CAP
+                return
+        self.forwarded[stream] += len(chunk)
+        self.pending[stream] += chunk
+        if not self.flush(stream):
+            # The consumer went away; nobody is listening for the result.
+            self.outcome = 128 + signal.SIGPIPE
+
+    def drain_ready(self):
+        for fd in list(self.sources):
+            while fd in self.sources and self.outcome is None:
+                before = self.forwarded[self.sources[fd]]
+                self.flush(self.sources[fd], block=True)
+                try:
+                    self.on_readable(fd)
+                except OSError:
+                    break
+                if fd in self.sources and self.forwarded[self.sources[fd]] == before:
+                    break
+
+    # -- main loop ---------------------------------------------------------
+    def run(self):
+        libc = ctypes.CDLL(None, use_errno=True)
+        self.libc = libc
+        parent = os.getppid()
+        set_prctl(libc, PR_SET_PDEATHSIG, signal.SIGTERM)
+        if os.getppid() != parent:
+            fail("parent exited during startup", 128 + signal.SIGTERM)
+        set_prctl(libc, PR_SET_CHILD_SUBREAPER, 1)
+
+        self.install_signals()
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.wake_read, selectors.EVENT_READ)
+        self.spawn()
+        for fd in self.sources:
+            self.selector.register(fd, selectors.EVENT_READ)
+
+        end = time.monotonic() + self.deadline if self.deadline > 0 else None
+        while self.outcome is None:
+            if self.stop_signal is not None:
+                self.outcome = 128 + self.stop_signal
+                break
+            if not self.sources and self.leader_exited():
+                break
+            timeout = REAP_POLL_SECONDS if not self.sources else None
+            if end is not None:
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    self.outcome = EXIT_TIMEOUT
+                    break
+                timeout = remaining if timeout is None else min(timeout, remaining)
+            # Stop reading while a stream's consumer is behind (backpressure).
+            for fd, stream in self.sources.items():
+                wanted = selectors.EVENT_READ if not self.pending[stream] else 0
+                try:
+                    if wanted:
+                        self.selector.modify(fd, wanted)
+                    else:
+                        self.selector.unregister(fd)
+                except KeyError:
+                    if wanted:
+                        self.selector.register(fd, wanted)
+            for stream in (1, 2):
+                if self.pending[stream]:
+                    try:
+                        self.selector.register(stream, selectors.EVENT_WRITE)
+                    except KeyError:
+                        pass
+            events = self.selector.select(timeout)
+            for stream in (1, 2):
+                try:
+                    self.selector.unregister(stream)
+                except KeyError:
+                    pass
+            for key, _mask in events:
+                if key.fd == self.wake_read:
+                    try:
+                        while os.read(self.wake_read, 512):
+                            pass
+                    except BlockingIOError:
+                        pass
+                elif key.fd in (1, 2):
+                    if not self.flush(key.fd):
+                        self.outcome = 128 + signal.SIGPIPE
+                elif key.fd in self.sources:
+                    self.on_readable(key.fd)
+                if self.outcome is not None:
+                    break
+            # Once the command itself has exited, collect what it already
+            # wrote and stop: a background descendant holding the pipes open
+            # must not keep the job alive.
+            if self.outcome is None and self.stop_signal is None and self.leader_exited():
+                self.drain_ready()
+                break
+
+        # Deliver what was accepted before any termination.
+        for stream in (1, 2):
+            self.flush(stream, block=True)
+        self.terminate_all()
+        if self.outcome is not None:
+            return self.outcome
+        return self.leader_status if self.leader_status is not None else EXIT_USAGE
+
+
+def main():
+    # Nothing inherited beyond stdio may reach the command.
+    for name in os.listdir("/proc/self/fd"):
+        fd = int(name)
+        if fd > 2:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    stdout_cap, stderr_cap, deadline, grace, command = parse_args(sys.argv[1:])
+    status = Supervisor(stdout_cap, stderr_cap, deadline, grace, command).run()
+    os._exit(status)
+
+
+if __name__ == "__main__":
+    main()

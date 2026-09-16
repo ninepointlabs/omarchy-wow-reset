@@ -1,0 +1,170 @@
+{
+ "character": {
+  "name": "Examplemonk",
+  "realm": {
+   "slug": "area-52"
+  }
+ },
+ "expansions": [
+  {
+   "expansion": {
+    "name": "The War Within",
+    "id": 514
+   },
+   "instances": [
+    {
+     "instance": {
+      "name": "Liberation of Undermine",
+      "id": 1296
+     },
+     "modes": [
+      {
+       "difficulty": {
+        "type": "HEROIC",
+        "name": "Heroic"
+       },
+       "status": {
+        "type": "COMPLETE",
+        "name": "Complete"
+       },
+       "progress": {
+        "completed_count": 8,
+        "total_count": 8,
+        "encounters": [
+         {
+          "encounter": {
+           "name": "Vexie and the Geargrinders",
+           "id": 3009
+          },
+          "completed_count": 4,
+          "last_kill_timestamp": 1745000000000
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "expansion": {
+    "name": "Midnight",
+    "id": 516
+   },
+   "instances": [
+    {
+     "instance": {
+      "name": "The Venomous Abyss",
+      "id": 1400
+     },
+     "modes": [
+      {
+       "difficulty": {
+        "type": "HEROIC",
+        "name": "Heroic"
+       },
+       "status": {
+        "type": "COMPLETE",
+        "name": "Complete"
+       },
+       "progress": {
+        "completed_count": 8,
+        "total_count": 8,
+        "encounters": [
+         {
+          "encounter": {
+           "name": "Boss One",
+           "id": 1
+          },
+          "completed_count": 5,
+          "last_kill_timestamp": 1789500000000
+         },
+         {
+          "encounter": {
+           "name": "Boss Two",
+           "id": 2
+          },
+          "completed_count": 5,
+          "last_kill_timestamp": 1789510000000
+         },
+         {
+          "encounter": {
+           "name": "Boss Three",
+           "id": 3
+          },
+          "completed_count": 4,
+          "last_kill_timestamp": 1789000000000
+         }
+        ]
+       }
+      },
+      {
+       "difficulty": {
+        "type": "MYTHIC",
+        "name": "Mythic"
+       },
+       "status": {
+        "type": "IN_PROGRESS",
+        "name": "In Progress"
+       },
+       "progress": {
+        "completed_count": 5,
+        "total_count": 8,
+        "encounters": [
+         {
+          "encounter": {
+           "name": "Boss One",
+           "id": 1
+          },
+          "completed_count": 2,
+          "last_kill_timestamp": 1789520000000
+         },
+         {
+          "encounter": {
+           "name": "<b>Boss Four</b>",
+           "id": 4
+          },
+          "completed_count": 1,
+          "last_kill_timestamp": 1789000000000
+         }
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "instance": {
+      "name": "The Tidebound Grotto",
+      "id": 1401
+     },
+     "modes": [
+      {
+       "difficulty": {
+        "type": "NORMAL",
+        "name": "Normal"
+       },
+       "status": {
+        "type": "COMPLETE",
+        "name": "Complete"
+       },
+       "progress": {
+        "completed_count": 1,
+        "total_count": 1,
+        "encounters": [
+         {
+          "encounter": {
+           "name": "Grotto Boss",
+           "id": 9
+          },
+          "completed_count": 1,
+          "last_kill_timestamp": 1789000000000
+         }
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
