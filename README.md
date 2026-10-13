@@ -128,4 +128,5 @@ directory to remove them.
 node tests/model.test.cjs                      # reset math, lockout/vault counting, process boundary
 /usr/bin/python3 -I -B tests/ops_test.py       # parsers on saved API responses; settings store
 tests/bounded-run.test.sh bin/bounded-run      # supervisor: caps, deadline, process-group cleanup
+tests/panel.test.sh                            # chip clicks and panel settings in a real Quickshell (Wayland session)
 ```
