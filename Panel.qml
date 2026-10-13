@@ -31,6 +31,10 @@ Panel {
 
   readonly property int revision: service ? service.revision : 0
   readonly property string region: service ? service.region : "us"
+  // Read the way BarWidget reads them, so the pickers show what the chip shows.
+  readonly property string icon: Model.validIcon(settings ? settings.icon : "")
+  readonly property bool showCountdown: !settings || settings.showCountdown === undefined
+    || settings.showCountdown === null || settings.showCountdown === true
   readonly property double nowMs: service ? service.nowMs : Date.now()
   readonly property var characters: service && revision >= 0 ? service.characters : []
   readonly property var affixes: service && revision >= 0 ? service.affixes : null
@@ -77,6 +81,17 @@ Panel {
   function setRegion(label) {
     if (Model.validRegion(label) === "" || Model.validRegion(label) === root.region) return
     persistSettings({ region: Model.regionLabel(label) })
+  }
+
+  function setIcon(value) {
+    var next = String(value).toLowerCase()
+    if (Model.validIcon(next) !== next || next === root.icon) return
+    persistSettings({ icon: next.charAt(0).toUpperCase() + next.slice(1) })
+  }
+
+  function setShowCountdown(value) {
+    if (value === root.showCountdown) return
+    persistSettings({ showCountdown: value === true })
   }
 
   // Clear the form once a lookup or credential save succeeds.
@@ -254,6 +269,58 @@ Panel {
           fontFamily: root.fontFamily
           fontSize: Style.font.bodySmall
           onChanged: function(v) { root.setRegion(v) }
+        }
+      }
+
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(iconCaption.implicitHeight, iconChoice.implicitHeight)
+
+        Caption {
+          id: iconCaption
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          text: "BAR ICON"
+        }
+
+        ButtonGroup {
+          id: iconChoice
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          options: [
+            { value: "sword", label: "Sword" },
+            { value: "horde", label: "Horde" },
+            { value: "alliance", label: "Alliance" }
+          ]
+          value: root.icon
+          focusable: false
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          onChanged: function(v) { root.setIcon(v) }
+        }
+      }
+
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(countdownCaption.implicitHeight, countdownSwitch.implicitHeight)
+
+        Caption {
+          id: countdownCaption
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          text: "COUNTDOWN ON THE BAR"
+        }
+
+        ToggleSwitch {
+          id: countdownSwitch
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          checked: root.showCountdown
+          foreground: root.foreground
+          accent: root.accent
+          onToggled: root.setShowCountdown(!root.showCountdown)
         }
       }
 
