@@ -31,6 +31,10 @@ Panel {
 
   readonly property int revision: service ? service.revision : 0
   readonly property string region: service ? service.region : "us"
+  // Read the way BarWidget reads them, so the pickers show what the chip shows.
+  readonly property string icon: Model.validIcon(settings ? settings.icon : "")
+  readonly property bool showCountdown: !settings || settings.showCountdown === undefined
+    || settings.showCountdown === null || settings.showCountdown === true
   readonly property double nowMs: service ? service.nowMs : Date.now()
   readonly property var characters: service && revision >= 0 ? service.characters : []
   readonly property var affixes: service && revision >= 0 ? service.affixes : null
@@ -42,6 +46,7 @@ Panel {
   readonly property bool statusIsError: lastError !== ""
 
   property bool showCredentials: false
+  property bool showSettings: false
 
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -57,6 +62,37 @@ Panel {
   function submitCredentials() {
     if (!service) return
     service.saveBlizzard(clientIdField.text, clientSecretField.text)
+  }
+
+  // Omarchy has no settings menu on a plugin chip, so the panel writes its own
+  // shell.json entry (the same way the built-in clock saves its format).
+  // Applied locally first so the countdown and realm hint switch on the click;
+  // the host widget is kept in step so it does not inject a stale copy back.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+
+    root.settings = entry
+    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function setRegion(label) {
+    if (Model.validRegion(label) === "" || Model.validRegion(label) === root.region) return
+    persistSettings({ region: Model.regionLabel(label) })
+  }
+
+  function setIcon(value) {
+    var next = String(value).toLowerCase()
+    if (Model.validIcon(next) !== next || next === root.icon) return
+    persistSettings({ icon: next.charAt(0).toUpperCase() + next.slice(1) })
+  }
+
+  function setShowCountdown(value) {
+    if (value === root.showCountdown) return
+    persistSettings({ showCountdown: value === true })
   }
 
   // Clear the form once a lookup or credential save succeeds.
@@ -208,6 +244,121 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onClicked: if (root.service) root.service.refresh()
+        }
+      }
+
+      // ------------------------------------------------------ Settings --
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(settingsCaption.implicitHeight, settingsAction.implicitHeight)
+
+        Caption {
+          id: settingsCaption
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          text: "SETTINGS · " + Model.regionLabel(root.region)
+        }
+
+        Text {
+          id: settingsAction
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: root.showSettings ? "Hide" : "Show"
+          color: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+
+          MouseArea {
+            anchors.fill: parent
+            anchors.margins: -Style.space(4)
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.showSettings = !root.showSettings
+          }
+        }
+      }
+
+      Column {
+        visible: root.showSettings
+        width: parent.width
+        spacing: Style.space(6)
+
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(regionCaption.implicitHeight, regionChoice.implicitHeight)
+
+          Caption {
+            id: regionCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "REGION"
+          }
+
+          ButtonGroup {
+            id: regionChoice
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            options: ["US", "EU", "KR", "TW"]
+            value: Model.regionLabel(root.region)
+            focusable: false
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setRegion(v) }
+          }
+        }
+
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(iconCaption.implicitHeight, iconChoice.implicitHeight)
+
+          Caption {
+            id: iconCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "BAR ICON"
+          }
+
+          ButtonGroup {
+            id: iconChoice
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            options: [
+              { value: "sword", label: "Sword" },
+              { value: "horde", label: "Horde" },
+              { value: "alliance", label: "Alliance" }
+            ]
+            value: root.icon
+            focusable: false
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setIcon(v) }
+          }
+        }
+
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(countdownCaption.implicitHeight, countdownSwitch.implicitHeight)
+
+          Caption {
+            id: countdownCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "COUNTDOWN ON THE BAR"
+          }
+
+          ToggleSwitch {
+            id: countdownSwitch
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            checked: root.showCountdown
+            foreground: root.foreground
+            accent: root.accent
+            onToggled: root.setShowCountdown(!root.showCountdown)
+          }
         }
       }
 
