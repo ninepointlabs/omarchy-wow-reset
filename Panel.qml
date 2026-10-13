@@ -59,6 +59,26 @@ Panel {
     service.saveBlizzard(clientIdField.text, clientSecretField.text)
   }
 
+  // Omarchy has no settings menu on a plugin chip, so the panel writes its own
+  // shell.json entry (the same way the built-in clock saves its format).
+  // Applied locally first so the countdown and realm hint switch on the click;
+  // the host widget is kept in step so it does not inject a stale copy back.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+
+    root.settings = entry
+    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function setRegion(label) {
+    if (Model.validRegion(label) === "" || Model.validRegion(label) === root.region) return
+    persistSettings({ region: Model.regionLabel(label) })
+  }
+
   // Clear the form once a lookup or credential save succeeds.
   Connections {
     target: root.service
@@ -208,6 +228,32 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onClicked: if (root.service) root.service.refresh()
+        }
+      }
+
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(regionCaption.implicitHeight, regionChoice.implicitHeight)
+
+        Caption {
+          id: regionCaption
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          text: "REGION"
+        }
+
+        ButtonGroup {
+          id: regionChoice
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          options: ["US", "EU", "KR", "TW"]
+          value: Model.regionLabel(root.region)
+          focusable: false
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          onChanged: function(v) { root.setRegion(v) }
         }
       }
 

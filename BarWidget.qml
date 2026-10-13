@@ -105,9 +105,11 @@ BarWidget {
     tooltipText: Model.regionLabel(root.region) + " weekly reset in " + Model.countdownText(root.msLeft)
       + " · " + Model.localResetText(root.region, root.nowMs)
 
+    // Left opens the panel (region lives there), middle refreshes; right is
+    // left alone rather than doubling as a second "open".
     onPressed: function(b) {
       if (b === Qt.MiddleButton) { if (root.service) root.service.refresh() }
-      else root.togglePanel()
+      else if (b === Qt.LeftButton) root.togglePanel()
     }
 
     Row {
