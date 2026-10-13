@@ -11,9 +11,9 @@ No account and no API key needed for the basics. Raid lockouts are an optional e
 
 - **Bar chip** — time until the weekly reset, e.g. `2d 3h`. US resets Tuesday 15:00 UTC, EU Wednesday
   04:00 UTC, KR/TW Wednesday 23:00 UTC. The chip turns your accent colour in the last six hours.
-- **Bar icon** — a sword by default. Pick *Horde* or *Alliance* under *Bar icon* in the panel and the
-  faction emblem replaces it, drawn in the bar colour.
-- **Click the chip** — the settings (region, bar icon, countdown), this week's affixes, then a card per character:
+- **Bar icon** — a sword by default. Pick *Horde* or *Alliance* under *Settings → Bar icon* in the panel and
+  the faction emblem replaces it, drawn in the bar colour.
+- **Click the chip** — this week's affixes, then a card per character:
   - Mythic+ runs this week, highest keys, and Great Vault dungeon slots (1 / 4 / 8 runs).
   - Season raid progression (from Raider.io), or — with Battle.net connected — which bosses they have
     killed **since reset** on each difficulty, and Great Vault raid slots.
@@ -67,7 +67,7 @@ omarchy restart shell
 
 ## Settings
 
-The top of the panel has the widget's settings; they are saved to `~/.config/omarchy/shell.json`.
+Click *Show* next to *Settings* at the top of the panel. Changes are saved to `~/.config/omarchy/shell.json`.
 
 - **Region** — US (default), EU, KR or TW: which reset to count down to and where new characters are looked up.
 - **Bar icon** — Sword (default), Horde or Alliance.

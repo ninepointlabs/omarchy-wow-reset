@@ -46,6 +46,7 @@ Panel {
   readonly property bool statusIsError: lastError !== ""
 
   property bool showCredentials: false
+  property bool showSettings: false
 
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -246,81 +247,118 @@ Panel {
         }
       }
 
+      // ------------------------------------------------------ Settings --
       Item {
         width: parent.width
-        implicitHeight: Math.max(regionCaption.implicitHeight, regionChoice.implicitHeight)
+        implicitHeight: Math.max(settingsCaption.implicitHeight, settingsAction.implicitHeight)
 
         Caption {
-          id: regionCaption
+          id: settingsCaption
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          text: "REGION"
+          text: "SETTINGS"
         }
 
-        ButtonGroup {
-          id: regionChoice
+        Text {
+          id: settingsAction
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          options: ["US", "EU", "KR", "TW"]
-          value: Model.regionLabel(root.region)
-          focusable: false
-          foreground: root.foreground
-          accent: root.accent
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onChanged: function(v) { root.setRegion(v) }
+          textFormat: Text.PlainText
+          text: root.showSettings ? "Hide" : "Show"
+          color: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+
+          MouseArea {
+            anchors.fill: parent
+            anchors.margins: -Style.space(4)
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.showSettings = !root.showSettings
+          }
         }
       }
 
-      Item {
+      Column {
+        visible: root.showSettings
         width: parent.width
-        implicitHeight: Math.max(iconCaption.implicitHeight, iconChoice.implicitHeight)
+        spacing: Style.space(6)
 
-        Caption {
-          id: iconCaption
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          text: "BAR ICON"
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(regionCaption.implicitHeight, regionChoice.implicitHeight)
+
+          Caption {
+            id: regionCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "REGION"
+          }
+
+          ButtonGroup {
+            id: regionChoice
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            options: ["US", "EU", "KR", "TW"]
+            value: Model.regionLabel(root.region)
+            focusable: false
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setRegion(v) }
+          }
         }
 
-        ButtonGroup {
-          id: iconChoice
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          options: [
-            { value: "sword", label: "Sword" },
-            { value: "horde", label: "Horde" },
-            { value: "alliance", label: "Alliance" }
-          ]
-          value: root.icon
-          focusable: false
-          foreground: root.foreground
-          accent: root.accent
-          fontFamily: root.fontFamily
-          fontSize: Style.font.bodySmall
-          onChanged: function(v) { root.setIcon(v) }
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(iconCaption.implicitHeight, iconChoice.implicitHeight)
+
+          Caption {
+            id: iconCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "BAR ICON"
+          }
+
+          ButtonGroup {
+            id: iconChoice
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            options: [
+              { value: "sword", label: "Sword" },
+              { value: "horde", label: "Horde" },
+              { value: "alliance", label: "Alliance" }
+            ]
+            value: root.icon
+            focusable: false
+            foreground: root.foreground
+            accent: root.accent
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onChanged: function(v) { root.setIcon(v) }
+          }
         }
-      }
 
-      Item {
-        width: parent.width
-        implicitHeight: Math.max(countdownCaption.implicitHeight, countdownSwitch.implicitHeight)
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(countdownCaption.implicitHeight, countdownSwitch.implicitHeight)
 
-        Caption {
-          id: countdownCaption
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          text: "COUNTDOWN ON THE BAR"
-        }
+          Caption {
+            id: countdownCaption
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "COUNTDOWN ON THE BAR"
+          }
 
-        ToggleSwitch {
-          id: countdownSwitch
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          checked: root.showCountdown
-          foreground: root.foreground
-          accent: root.accent
-          onToggled: root.setShowCountdown(!root.showCountdown)
+          ToggleSwitch {
+            id: countdownSwitch
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            checked: root.showCountdown
+            foreground: root.foreground
+            accent: root.accent
+            onToggled: root.setShowCountdown(!root.showCountdown)
+          }
         }
       }
 
