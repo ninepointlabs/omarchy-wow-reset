@@ -256,7 +256,7 @@ Panel {
           id: settingsCaption
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          text: "SETTINGS"
+          text: "SETTINGS · " + Model.regionLabel(root.region)
         }
 
         Text {
