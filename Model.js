@@ -358,7 +358,8 @@ function parseOps(text) {
     emblem: parsed.emblem && typeof parsed.emblem === "object"
       && validEmblemPath(parsed.emblem.path, parsed.emblem.faction) !== ""
       ? { faction: parsed.emblem.faction, path: parsed.emblem.path } : null,
-    fetchedAt: asInt(parsed.fetchedAt)
+    fetchedAt: asInt(parsed.fetchedAt),
+    python: typeof parsed.python === "string" && /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(parsed.python) ? parsed.python : ""
   }
 }
 
@@ -430,4 +431,70 @@ function jobFailure(exitCode, what) {
   if (exitCode === 202) return subject + " error output was truncated"
   if (exitCode >= 125 && exitCode <= 127) return "Could not start the WoW Reset helper"
   return ""
+}
+
+// ---------------------------------------------------------------------------
+// About. The version is read from manifest.json and the license text from
+// LICENSE at runtime; these are the facts that live nowhere else.
+// ---------------------------------------------------------------------------
+
+var ABOUT = {
+  name: "WoW Weekly Reset",
+  tagline: "World of Warcraft weekly reset countdown, Mythic+ affixes, weekly keys and raid lockouts for Omarchy",
+  organization: "Nine Point Labs",
+  supportEmail: "help@ninepointlabs.com",
+  created: "September 2026", // first commit: 2026-09-16
+  license: "MIT License",
+  copyright: "© 2026 Nine Point Labs" // as written in LICENSE
+}
+
+var PRIVACY = "No account, no sign-in and no telemetry. The widget connects only to raider.io, for this week's "
+  + "affixes and for the characters you add (their name, realm and region are sent there); to warcraft.wiki.gg, "
+  + "once, if you pick the Horde or Alliance icon; and, only if you connect Battle.net, to oauth.battle.net and "
+  + "<region>.api.blizzard.com for raid lockouts. It does not read your game files. Your characters, the emblem "
+  + "images and any Battle.net Client ID and Secret (0600, sent only to Battle.net) stay in "
+  + "~/.local/state/omarchy-wow-reset/; panel settings are saved in ~/.config/omarchy/shell.json."
+
+// "0.2.0" from manifest.json's text, or "" if it cannot be read.
+function manifestVersion(text) {
+  var parsed
+  try { parsed = JSON.parse(String(text || "")) } catch (e) { return "" }
+  var version = parsed && typeof parsed.version === "string" ? parsed.version : ""
+  return /^[0-9A-Za-z.+-]{1,32}$/.test(version) ? version : ""
+}
+
+// Highest minor version `has(major, minor)` accepts, as "major.minor"
+// (Quickshell.hasVersion / hasQtVersion only answer yes or no), or "".
+function probedVersion(has, major) {
+  if (typeof has !== "function" || !has(major, 0)) return ""
+  var minor = 0
+  while (minor < 99 && has(major, minor + 1)) minor++
+  return major + "." + minor
+}
+
+// One paragraph per line, so the license wraps to the panel width.
+function reflowLicense(text) {
+  var paragraphs = String(text || "").split(/\n\s*\n/)
+  var out = []
+  for (var i = 0; i < paragraphs.length; i++) {
+    var p = paragraphs[i].replace(/\s+/g, " ").trim()
+    if (p !== "") out.push(p)
+  }
+  return out.join("\n\n")
+}
+
+// Version details for a support email.
+function aboutDetails(version, quickshell, qt, python, desktop) {
+  var built = []
+  if (quickshell) built.push("Quickshell " + quickshell)
+  if (qt) built.push("Qt " + qt)
+  if (python) built.push("Python " + python)
+  return ABOUT.name + " " + (version || "unknown version") + "\n"
+    + (built.length > 0 ? built.join(", ") : "versions unknown") + "\n"
+    + (desktop || "unknown desktop")
+}
+
+function supportMailto(version, details) {
+  return "mailto:" + ABOUT.supportEmail + "?subject=" + encodeURIComponent(ABOUT.name + " " + (version || ""))
+    + "&body=" + encodeURIComponent("\n\n--\n" + details)
 }

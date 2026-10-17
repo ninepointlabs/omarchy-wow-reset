@@ -200,4 +200,37 @@ if (python) {
   fs.rmSync(hostile, { recursive: true, force: true });
 }
 
+// About: facts from the repo, versions and the support email.
+{
+  const manifest = fs.readFileSync(path.join(root, "manifest.json"), "utf8");
+  assert.equal(model.manifestVersion(manifest), JSON.parse(manifest).version);
+  assert.equal(model.manifestVersion("not json"), "");
+  assert.equal(model.manifestVersion('{"version":"1.0 <b>"}'), "");
+  assert.equal(JSON.parse(manifest).author, "Nine Point Labs");
+  const license = fs.readFileSync(path.join(root, "LICENSE"), "utf8");
+  assert.ok(license.startsWith(model.ABOUT.license));
+  assert.ok(license.includes(model.ABOUT.copyright.replace("©", "Copyright (c)")));
+  assert.equal(model.ABOUT.organization, "Nine Point Labs");
+  assert.equal(model.ABOUT.supportEmail, "help@ninepointlabs.com");
+  assert.equal(model.ABOUT.name, JSON.parse(manifest).name);
+  const reflowed = model.reflowLicense(license);
+  assert.ok(reflowed.startsWith("MIT License\n\nCopyright"));
+  assert.ok(!reflowed.includes("a copy\nof"));
+  assert.equal(model.probedVersion((major, minor) => major === 6 && minor <= 11, 6), "6.11");
+  assert.equal(model.probedVersion((major, minor) => major === 0 && minor <= 3, 0), "0.3");
+  assert.equal(model.probedVersion(() => false, 6), "");
+  assert.equal(model.probedVersion(null, 6), "");
+  const details = model.aboutDetails("0.2.0", "0.3", "6.11", "3.14.7", "Hyprland, wayland");
+  assert.equal(details, "WoW Weekly Reset 0.2.0\nQuickshell 0.3, Qt 6.11, Python 3.14.7\nHyprland, wayland");
+  const mail = model.supportMailto("0.2.0", details);
+  assert.ok(mail.startsWith("mailto:help@ninepointlabs.com?subject=WoW%20Weekly%20Reset%200.2.0&body="));
+  assert.ok(decodeURIComponent(mail.split("&body=")[1]).endsWith("Python 3.14.7\nHyprland, wayland"));
+  // Every host the helper may reach is named in the privacy statement.
+  for (const host of ["raider.io", "warcraft.wiki.gg", "oauth.battle.net", "api.blizzard.com"])
+    assert.ok(model.PRIVACY.includes(host), host);
+  assert.ok(model.PRIVACY.includes("no telemetry"));
+  assert.equal(model.parseOps('{"ok":true,"python":"3.14.7"}').python, "3.14.7");
+  assert.equal(model.parseOps('{"ok":true,"python":"3.14; rm"}').python, "");
+}
+
 console.log("model tests passed");

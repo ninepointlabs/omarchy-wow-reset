@@ -912,7 +912,8 @@ def op_load(home):
             os.close(dir_fd)
     except StoreError as exc:
         fail(str(exc), 9)
-    result = {"ok": True, "config": {"version": 1, "characters": []}, "blizzard": has_blizzard}
+    result = {"ok": True, "config": {"version": 1, "characters": []}, "blizzard": has_blizzard,
+              "python": "%d.%d.%d" % sys.version_info[:3]}  # for the About page
     if raw is None or not raw.strip():
         return result
     try:

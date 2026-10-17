@@ -18,6 +18,10 @@ No account and no API key needed for the basics. Raid lockouts are an optional e
   - Season raid progression (from Raider.io), or — with Battle.net connected — which bosses they have
     killed **since reset** on each difficulty, and Great Vault raid slots.
 - **Middle-click the chip** — refresh without opening the panel.
+- **About** — the 󰋽 button at the top of the panel (or `qs -p /usr/share/omarchy/shell ipc call ninepointlabs.wow-reset about`) shows
+  the version, license (readable in place, with the third-party notices), Nine Point Labs, what the widget
+  does with your data, and the support address, [help@ninepointlabs.com](mailto:help@ninepointlabs.com),
+  with *Email* and *Copy* buttons.
 
 Data refreshes when the shell starts, every hour, a few minutes after reset, and on demand.
 
@@ -128,5 +132,5 @@ directory to remove them.
 node tests/model.test.cjs                      # reset math, lockout/vault counting, process boundary
 /usr/bin/python3 -I -B tests/ops_test.py       # parsers on saved API responses; settings store
 tests/bounded-run.test.sh bin/bounded-run      # supervisor: caps, deadline, process-group cleanup
-tests/panel.test.sh                            # chip clicks and panel settings in a real Quickshell (Wayland session)
+tests/panel.test.sh                            # chip clicks, panel settings and About in a real Quickshell (Wayland session)
 ```
