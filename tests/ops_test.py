@@ -94,6 +94,14 @@ class Parsers(unittest.TestCase):
         self.assertEqual(ops.iso_ms("2026-09-15T15:00:00.000Z"), 1789484400000)
         self.assertEqual(ops.iso_ms("garbage"), 0)
 
+    def test_about_privacy_names_every_host(self):
+        with open(os.path.join(ROOT, "Model.js"), encoding="utf-8") as fh:
+            model = fh.read()
+        privacy = model[model.index("var PRIVACY"):model.index("function manifestVersion")]
+        for host in sorted(ops.ALLOWED_HOSTS):
+            name = "<region>.api.blizzard.com" if host.endswith(".api.blizzard.com") else host
+            self.assertIn(name, privacy)
+
     def test_refuses_other_hosts(self):
         with self.assertRaises(ops.RemoteError):
             ops.request_json("https://example.com/x", "Test")
@@ -260,6 +268,7 @@ class Store(unittest.TestCase):
     def test_load_empty(self):
         code, out = run(self.home, {"op": "load"})
         self.assertEqual((code, out["config"]["characters"], out["blizzard"]), (0, [], False))
+        self.assertEqual(out["python"], "%d.%d.%d" % sys.version_info[:3])
 
     def test_symlinked_config_refused(self):
         os.makedirs(self.state, mode=0o700)

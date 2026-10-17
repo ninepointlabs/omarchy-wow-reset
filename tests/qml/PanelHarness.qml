@@ -207,10 +207,38 @@ ShellRoot {
       h.link.children[0].clicked(null)
       h.check("Hide collapses the settings",
         !h.regionGroup.visible && !h.iconGroup.visible && !h.countdownSwitch.visible && h.link.text === "Show", h.link.text)
+
+      var aboutButton = h.find(h.panel, function(o) { return o.objectName === "aboutButton" })
+      h.check("About button in the header", !!aboutButton && aboutButton.visible)
+      h.w.open()
+      aboutButton.clicked()
+      h.check("About button opens the About page", h.panel.showAbout === true
+        && h.byName("aboutColumn").visible && !h.byName("aboutColumn").parent.children[0].visible)
+    },
+    function() {
+      h.check("About shows the manifest version", /^Version \d+\.\d+/.test(h.byName("aboutVersion").text), h.byName("aboutVersion").text)
+      h.check("About states privacy", String(h.byName("aboutPrivacy").text).indexOf("no telemetry") >= 0)
+      h.check("About credits Nine Point Labs", !!h.find(h.panel, function(o) { return o.text === "Nine Point Labs" }))
+      h.check("license text hidden at first", !h.byName("aboutLicenseText").visible)
+      h.byName("aboutLicenseLink").activated()
+    },
+    function() {
+      var text = h.byName("aboutLicenseText")
+      h.check("license text readable", text.visible && String(text.text).indexOf("MIT License\n\nCopyright (c) 2026 Nine Point Labs") === 0,
+        String(text.text).substring(0, 60))
+      h.check("details name the versions", /^WoW Weekly Reset 0\.2\.0\nQuickshell 0\.\d+, Qt 6\.\d+/.test(h.panel.aboutDetails), h.panel.aboutDetails)
+      h.byName("aboutBack").clicked()
+      h.check("Back returns to the panel", h.panel.showAbout === false && !h.byName("aboutColumn").visible && h.link.visible)
+      var ipc = h.find(h.w, function(o) { return typeof o.about === "function" && typeof o.countdown === "function" })
+      ipc.about()
+      h.check("IPC about opens the panel on About", h.w.opened === true && h.panel.showAbout === true)
       h.w.close()
+      h.check("closing the panel leaves About", h.panel.showAbout === false)
       h.finish()
     }
   ]
+
+  function byName(name) { return h.find(h.panel, function(o) { return o.objectName === name }) }
 
   property int step: 0
   Timer {

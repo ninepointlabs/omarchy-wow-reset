@@ -51,6 +51,7 @@ Item {
   property string lastError: ""
   property string actionStatus: ""
   property int revision: 0
+  property string pythonVersion: ""
   property double refreshedAtMs: 0
   property double nowMs: Date.now()
 
@@ -136,6 +137,7 @@ Item {
       }
       root.characters = parsed.config.characters
       root.blizzard = parsed.blizzard
+      root.pythonVersion = parsed.python
       root.lastError = parsed.error || ""
       root.loaded = true
       root.revision += 1

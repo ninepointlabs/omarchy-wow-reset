@@ -29,7 +29,7 @@ mkdir -p "$work/root" "$work/plugin" "$work/home/.local/state" "$work/home/.cach
 # qs resolves qs.Ui / qs.Commons relative to the config root.
 cp -r "$SHELL_SRC/Ui" "$SHELL_SRC/Commons" "$work/root/"
 cp "$ROOT/tests/qml/PanelHarness.qml" "$work/root/shell.qml"
-cp "$ROOT"/*.qml "$ROOT"/*.js "$ROOT/manifest.json" "$work/plugin/"
+cp "$ROOT"/*.qml "$ROOT"/*.js "$ROOT/manifest.json" "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$work/plugin/"
 cp -r "$ROOT/bin" "$work/plugin/"
 
 HOME="$work/home" XDG_STATE_HOME="$work/home/.local/state" XDG_CACHE_HOME="$work/home/.cache" \

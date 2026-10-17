@@ -3,7 +3,7 @@
   "id": "ninepointlabs.wow-reset",
   "name": "WoW Weekly Reset",
   "version": "0.2.0",
-  "author": "Ninepoint Labs",
+  "author": "Nine Point Labs",
   "license": "MIT",
   "description": "World of Warcraft weekly reset countdown for Omarchy, with this week's Mythic+ affixes, your characters' weekly keys, and optional raid lockouts.",
   "kinds": [
