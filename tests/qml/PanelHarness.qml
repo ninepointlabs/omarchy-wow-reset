@@ -226,7 +226,7 @@ ShellRoot {
       var text = h.byName("aboutLicenseText")
       h.check("license text readable", text.visible && String(text.text).indexOf("MIT License\n\nCopyright (c) 2026 Nine Point Labs") === 0,
         String(text.text).substring(0, 60))
-      h.check("details name the versions", /^WoW Weekly Reset 0\.2\.1\nQuickshell 0\.\d+, Qt 6\.\d+/.test(h.panel.aboutDetails), h.panel.aboutDetails)
+      h.check("details name the versions", /^WoW Weekly Reset @MANIFEST_VERSION_RE@\nQuickshell 0\.\d+, Qt 6\.\d+/.test(h.panel.aboutDetails), h.panel.aboutDetails)
       h.byName("aboutBack").clicked()
       h.check("Back returns to the panel", h.panel.showAbout === false && !h.byName("aboutColumn").visible && h.link.visible)
       var ipc = h.find(h.w, function(o) { return typeof o.about === "function" && typeof o.countdown === "function" })

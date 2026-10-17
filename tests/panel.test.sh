@@ -29,6 +29,9 @@ mkdir -p "$work/root" "$work/plugin" "$work/home/.local/state" "$work/home/.cach
 # qs resolves qs.Ui / qs.Commons relative to the config root.
 cp -r "$SHELL_SRC/Ui" "$SHELL_SRC/Commons" "$work/root/"
 cp "$ROOT/tests/qml/PanelHarness.qml" "$work/root/shell.qml"
+# The version check follows manifest.json, so a release bump doesn't break it.
+version_re=$(jq -r .version "$ROOT/manifest.json" | sed 's/\./\\\\./g')
+sed -i "s/@MANIFEST_VERSION_RE@/$version_re/" "$work/root/shell.qml"
 cp "$ROOT"/*.qml "$ROOT"/*.js "$ROOT/manifest.json" "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$work/plugin/"
 cp -r "$ROOT/bin" "$work/plugin/"
 
